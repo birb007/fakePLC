@@ -5,35 +5,37 @@ import (
     "encoding/binary"
 )
 
-// MODBUS defines four blocks:
-// - Discrete Input
-// - Coils
-// - Input Registers
-// - Holding Registers
-//
-// Each of these inputs define 1..n elements which map onto the
-// device in a vendor specific manner.
-//
-// Three categories of MODBUS function codes:
-// - Public Function Codes
-// - User-Defined Function Codes
-// - Reserved Function Codes
-
 type FunctionCode  byte
 type ExceptionCode byte
 
+type RequestPDU struct {
+    FunctionCode FunctionCode
+    Data         []byte
+}
+
+type ResponsePDU struct {
+    FunctionCode FunctionCode
+    Data         []byte
+}
+
+type ExceptionResponsePDU struct {
+    FunctionCode  FunctionCode
+    ExceptionCode ExceptionCode
+}
+
 type ModbusDevice interface {
-    // Not a MODBUS function but is useful for reducing user provided code:
+    Process([]byte) []byte
+    // Not a MODBUS function but is useful for reducing code:
     // returns whether the PLC is in Listening Only Mode where the PLC does
-    // not respond to any requests which we can implement in the server
-    // ourselves without touching the user PLC.
-    InListenOnlyMode()              bool
+    // not respond to any requests.
+    //InListenOnlyMode()              bool
 
     // MODBUS functions
-    ReadCoil(addr uint16)           (byte, ExceptionCode)
-    ReadDiscreteInputs(addr uint16) (byte, ExceptionCode)
+    ReadCoils(*RequestPDU)            (*ResponsePDU, ExceptionCode)
+    ReadDiscreteInputs(*RequestPDU)   (*ResponsePDU, ExceptionCode)
+    ReadHoldingRegisters(*RequestPDU) (*ResponsePDU, ExceptionCode)
+    ReadInputRegisters(*RequestPDU)   (*ResponsePDU, ExceptionCode)
     /*
-     *ReadHoldingRegisters()
      *ReadInputRegisters()
      *WriteSingleCoil()
      *WriteSingleRegister()
@@ -79,8 +81,8 @@ type SerialModbusDevice interface {
 
 // Represents a full MODBUS device with serial and non-serial interfaces.
 type FullModbusDevice interface {
-    *ModbusDevice
-    *SerialModbusDevice
+    ModbusDevice
+    SerialModbusDevice
 }
 
 const (
@@ -108,28 +110,21 @@ const (
     ReadDeviceIdentification       FunctionCode = 0x0e
 
     // Constant added to function codes to indicate exception.
-    exceptionOffset        byte          = 0x80
-    ExceptionNone          ExceptionCode = 0x00
-    ExceptionOutOfBounds   ExceptionCode = 0x03
+    exceptionOffset      byte          = 0x80
+    ExceptionNone        ExceptionCode = 0x00
+    ExceptionInvalidFunc ExceptionCode = 0x01
+    ExceptionInvalidAddr ExceptionCode = 0x02
+    ExceptionOutOfBounds ExceptionCode = 0x03
+    ExceptionDeviceFail  ExceptionCode = 0x04
+    ExceptionAcknowledge ExceptionCode = 0x05
+    ExceptionDeviceBusy  ExceptionCode = 0x06
+    ExceptionParityErr   ExceptionCode = 0x08
+    ExceptionGatewayPath ExceptionCode = 0x0a
+    ExceptionGatewayFail ExceptionCode = 0x0b
 )
 
 func NewExc(function FunctionCode) ExceptionCode {
     return ExceptionCode(byte(function) + exceptionOffset)
-}
-
-type RequestPDU struct {
-    FunctionCode FunctionCode
-    Data         []byte
-}
-
-type ResponsePDU struct {
-    FunctionCode FunctionCode
-    Data         []byte
-}
-
-type ExceptionResponsePDU struct {
-    FunctionCode  FunctionCode
-    ExceptionCode ExceptionCode
 }
 
 // Serialization routines for RequestPDU and ResponsePDU
@@ -147,16 +142,37 @@ func (e *ExceptionResponsePDU)serialize() []byte {
     return buf
 }
 
-// Abstract type to satisfy protocol interface requirement.
-type Server struct {
-    device ModbusDevice
+type MemoryMap struct {
+    CoilMinAddr             uint16
+    CoilMaxAddr             uint16
+    DiscreteInputsMinAddr   uint16
+    DiscreteInputsMaxAddr   uint16
+    HoldingRegistersMinAddr uint16
+    HoldingRegistersMaxAddr uint16
+    InputRegistersMinAddr   uint16
+    InputRegistersMaxAddr   uint16
 }
 
-func NewServer(device ModbusDevice) Server {
-    return Server { device: device }
+// Default object which implements the base MODBUS specification.
+type ModbusServer struct {
+    Mmap             MemoryMap
+    Coils            []byte
+	DiscreteInputs   []byte
+	HoldingRegisters []uint16
+	InputRegisters   []uint16
 }
 
-func (s *Server)Process(datagram []byte) []byte {
+func NewServer(mmap MemoryMap) ModbusServer {
+    return ModbusServer {
+        Mmap:  mmap,
+        Coils:            make([]byte,   mmap.CoilMaxAddr - mmap.CoilMinAddr),
+        DiscreteInputs:   make([]byte,   mmap.DiscreteInputsMaxAddr - mmap.DiscreteInputsMinAddr),
+        HoldingRegisters: make([]uint16, mmap.HoldingRegistersMaxAddr - mmap.HoldingRegistersMinAddr),
+        InputRegisters:   make([]uint16, mmap.InputRegistersMaxAddr - mmap.InputRegistersMinAddr),
+    }
+}
+
+func (s *ModbusServer)Process(datagram []byte) []byte {
     request := RequestPDU {
         FunctionCode: FunctionCode(datagram[0]),
         Data:         datagram[1:],
@@ -164,20 +180,14 @@ func (s *Server)Process(datagram []byte) []byte {
 
     log.Printf("processing RequestPDU for 0x%02x", request.FunctionCode)
 
-    // If a device is in Listen Only Mode then the request is dropped without
-    // returning any input to the user.
-    if s.device.InListenOnlyMode() {
-        log.Printf("PLC is in listen only mode, dropping request")
-        return nil
-    }
-
     var response *ResponsePDU = nil
     var exception ExceptionCode = ExceptionNone
 
     // Dispatch function code to MODBUS handlers.
     switch request.FunctionCode {
-    case ReadCoils:          response, exception = s.readCoils(&request)
-    case ReadDiscreteInputs: response, exception = s.readDiscreteInputs(&request)
+    case ReadCoils:            response, exception = s.ReadCoils(&request)
+    case ReadDiscreteInputs:   response, exception = s.ReadDiscreteInputs(&request)
+    case ReadHoldingRegisters: response, exception = s.ReadHoldingRegisters(&request)
     default:
         log.Printf("unsupported function code 0x%02x", request.FunctionCode)
         exception = 0x1
@@ -205,17 +215,7 @@ func (s *Server)Process(datagram []byte) []byte {
     }
 }
 
-func validateBounds(request *RequestPDU, val uint16, lo uint16, hi uint16) bool {
-    if val > hi || val < lo {
-        log.Printf("(0x%02x) quantity exceeds MODBUS specification %04x <= %04x <= %04x",
-            request.FunctionCode, lo, val, hi)
-        return false
-    }
-    return true
-}
-
-// Returns a pair of slices of the (head, tail).
-func createVector(size byte) ([]byte, []byte) {
+func createBitVector(size byte) ([]byte, []byte) {
     allocSize := size >> 3
     if size % 8 != 0 {
         allocSize++
@@ -226,63 +226,71 @@ func createVector(size byte) ([]byte, []byte) {
     return data, data[1:]
 }
 
-func (s *Server)readCoils(request *RequestPDU) (*ResponsePDU, ExceptionCode) {
+func (s *ModbusServer)ReadCoils(request *RequestPDU) (*ResponsePDU, ExceptionCode) {
     startingAddr := binary.BigEndian.Uint16(request.Data[0:])
     n_coils      := binary.BigEndian.Uint16(request.Data[2:])
 
-    log.Printf("(0x%02x) Read Coils: quantity=%d, address=0x%04x",
-        request.FunctionCode, n_coils, startingAddr)
-
-    if !validateBounds(request, n_coils, 0x1, 0x07D0) {
+    if (n_coils < 0x1 || n_coils > 0x07D0) {
         return nil, ExceptionOutOfBounds
     }
+    if (startingAddr < s.Mmap.CoilMinAddr ||
+        startingAddr + n_coils > s.Mmap.CoilMaxAddr) {
+        return nil, ExceptionInvalidAddr
+    }
 
-    data, bitmap := createVector(byte(n_coils))
+    data, bitmap := createBitVector(byte(n_coils))
 
     for i := uint16(0); i < n_coils; i++ {
-        status, err := s.device.ReadCoil(startingAddr + i)
-        if ExceptionCode(err) != ExceptionNone {
-            return nil, ExceptionCode(err)
-        }
-        // FIXME: byte order might be wrong
-        bitmap[i >> 3] |= status << byte(i & 0x7)
+        bitmap[i >> 3] |= s.Coils[startingAddr + i] << byte(i & 0x7)
     }
 
     return &ResponsePDU{FunctionCode: ReadCoils, Data: data}, ExceptionNone
 }
 
-func (s *Server) readDiscreteInputs(request *RequestPDU) (*ResponsePDU, ExceptionCode) {
+func (s *ModbusServer)ReadDiscreteInputs(request *RequestPDU) (*ResponsePDU, ExceptionCode) {
     startingAddr := binary.BigEndian.Uint16(request.Data[0:])
     n_inputs     := binary.BigEndian.Uint16(request.Data[2:])
 
-    log.Printf("(0x%02x) Read Discrete Inputs: quantity=%d, address=0x%04x",
-        request.FunctionCode, n_inputs, startingAddr)
-
-    if !validateBounds(request, n_inputs, 0x1, 0x07D0) {
+    if (n_inputs < 0x1 || n_inputs > 0x07D0) {
         return nil, ExceptionOutOfBounds
     }
+    if (startingAddr < s.Mmap.DiscreteInputsMinAddr ||
+        startingAddr + n_inputs > s.Mmap.DiscreteInputsMaxAddr) {
+        return nil, ExceptionInvalidAddr
+    }
 
-    data, bitmap := createVector(byte(n_inputs))
+    data, bitmap := createBitVector(byte(n_inputs))
 
     for i := uint16(0); i < n_inputs; i++ {
-        status, err := s.device.ReadDiscreteInputs(startingAddr + i)
-        if ExceptionCode(err) != ExceptionNone {
-            return nil, ExceptionCode(err)
-        }
         // FIXME: byte order might be wrong
-        bitmap[i >> 3] |= status << byte(i & 0x7)
+        bitmap[i >> 3] |= s.DiscreteInputs[startingAddr + i] << byte(i & 0x7)
     }
 
     return &ResponsePDU{FunctionCode: ReadDiscreteInputs, Data: data}, ExceptionNone
 }
 
-/*
- *func (s *Server)readHoldingRegisters(request *RequestPDU) (*ResponsePDU, ExceptionCode) {
- *    addr   := binary.BigEndian.Uint16(request.Data[0:])
- *    n_regs := binary.BigEndian.Uint16(request.Data[2:])
- *
- *    if !validateBounds(n_regs, 0x1, 0x7D) {
- *        return nil, ExceptionOutOfBounds
- *    }
- *}
- */
+func (s *ModbusServer)ReadHoldingRegisters(request *RequestPDU) (*ResponsePDU, ExceptionCode) {
+    startingAddr := binary.BigEndian.Uint16(request.Data[0:])
+    n_regs       := binary.BigEndian.Uint16(request.Data[2:])
+
+    if (n_regs < 0x1 || n_regs > 0x007D) {
+        return nil, ExceptionOutOfBounds
+    }
+    if (startingAddr < s.Mmap.HoldingRegistersMinAddr ||
+        startingAddr + n_regs > s.Mmap.HoldingRegistersMaxAddr) {
+        return nil, ExceptionInvalidAddr
+    }
+
+    data, bitmap := createBitVector(byte(n_regs) * 16)
+
+    for i := uint16(0); i < n_regs; i++ {
+        // FIXME: byte order might be wrong
+        value := s.HoldingRegisters[startingAddr + i];
+        bitmap[(i << 1) + 0] = byte(value & 0xff)
+        bitmap[(i << 1) + 1] = byte(value >> 8)
+    }
+
+    return &ResponsePDU{FunctionCode: ReadDiscreteInputs, Data: data}, ExceptionNone
+}
+
+

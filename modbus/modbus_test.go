@@ -15,7 +15,12 @@ func FuzzProcess(f *testing.F) {
         InputRegistersMinAddr:   0x7531,
         InputRegistersMaxAddr:   0x9c3f,
     }
-    srv := NewServer(mmap, nil)
+    basicDevInfo := BasicDeviceIdentification{
+        VendorName:         []byte("fakePLC"),
+        ProductCode:        []byte("FuzzTarget"),
+        MajorMinorRevision: []byte("V0.1"),
+    }
+    srv := NewServer(mmap, basicDevInfo, nil)
 
     f.Fuzz(func(t *testing.T, request []byte) {
         srv.Process(request)

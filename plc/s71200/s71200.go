@@ -1,6 +1,12 @@
 package s71200
 
 import (
+    "time"
+    "io"
+    "log"
+    "bufio"
+    "context"
+    "net"
     "fakePLC/modbus"
 )
 
@@ -43,6 +49,30 @@ func New() S71200 {
 
     return plc
 }
+func (s *S71200)HandleMODBUSConn(ctx context.Context, conn net.Conn) {
+    log.Printf("reading MODBUS request from %s\n", conn.RemoteAddr().String())
+    // Prevent slow lorris attack with packet timeouts.
+    deadline := time.Now().Add(time.Duration(30 * time.Second))
+    conn.SetDeadline(deadline)
+
+    reader := bufio.NewReader(conn)
+    writer := bufio.NewWriter(conn)
+    // Minimum MODBUS packet size is 2 bytes.
+    // MTU is 1500 bytes but there is no requirement to use this value.
+    buf := make([]byte, 1500)
+    if _, err := io.ReadAtLeast(reader, buf, 2); err != nil {
+        panic(err)
+    }
+
+    // Process MODBUS request.
+    result := s.ModbusServer.Process(buf)
+    if _, err := writer.Write(result); err != nil {
+        panic(err)
+    }
+    // Write all buffered output into the socket.
+    writer.Flush()
+}
+
 
 func (s *S71200)Close() {
     s.logicHalt<- true

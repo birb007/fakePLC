@@ -30,7 +30,6 @@ func handleConnections(ctx context.Context, listener net.Listener, handler ConnH
             <-ctx.Done()
             listener.Close()
         }()
-
         // Handle the connection with user provided handler.
         go handler(ctx, conn)
     }
@@ -41,6 +40,5 @@ func launchService(ctx context.Context, proto, addr string, handler ConnHandler)
     if err != nil {
         panic(fmt.Sprintf("unable to bind on specified address: %v", err))
     }
-
     go handleConnections(ctx, listener, handler)
 }

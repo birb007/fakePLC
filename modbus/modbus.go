@@ -290,7 +290,6 @@ func (s *ModbusServer)Process(datagram []byte) (rawResponse []byte) {
         log.Printf("function 0x%02x threw exception %+v", request.FunctionCode, exceptionResponse)
         return exceptionResponse.serialize()
     }
-
     log.Printf("function 0x%02x returned %+v", request.FunctionCode, response)
 
     // If the MODBUS function did not return any data then the function
@@ -331,7 +330,6 @@ func (s *ModbusServer)ReadCoils(request *RequestPDU) (*ResponsePDU, ExceptionCod
     for i := uint16(0); i < n_coils; i++ {
         bitmap[i >> 3] |= s.Coils[startingAddr + i] << byte(i & 0x7)
     }
-
     return &ResponsePDU{FunctionCode: ReadCoils, Data: data}, ExceptionNone
 }
 
@@ -353,7 +351,6 @@ func (s *ModbusServer)ReadDiscreteInputs(request *RequestPDU) (*ResponsePDU, Exc
         // FIXME: byte order might be wrong
         bitmap[i >> 3] |= s.DiscreteInputs[startingAddr + i] << byte(i & 0x7)
     }
-
     return &ResponsePDU{FunctionCode: ReadDiscreteInputs, Data: data}, ExceptionNone
 }
 
@@ -376,7 +373,6 @@ func (s *ModbusServer)ReadHoldingRegisters(request *RequestPDU) (*ResponsePDU, E
         bitmap[(i << 1) + 0] = byte(value >> 8)
         bitmap[(i << 1) + 1] = byte(value & 0xff)
     }
-
     return &ResponsePDU{FunctionCode: ReadDiscreteInputs, Data: data}, ExceptionNone
 }
 
@@ -399,7 +395,6 @@ func (s *ModbusServer)ReadInputRegisters(request *RequestPDU) (*ResponsePDU, Exc
         bitmap[(i << 1) + 0] = byte(value >> 8)
         bitmap[(i << 1) + 1] = byte(value & 0xff)
     }
-
     return &ResponsePDU{FunctionCode: ReadDiscreteInputs, Data: data}, ExceptionNone
 }
 

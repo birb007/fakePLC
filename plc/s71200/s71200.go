@@ -24,8 +24,9 @@ func New() S71200 {
         DiscreteInputsMinAddr:   0x2711,
         DiscreteInputsMaxAddr:   0x4e1f,
         // The Holding Registers are split between two ranges.
-        HoldingRegistersMinAddr: 0x0000,
-        HoldingRegistersMaxAddr: 0x0000,
+        // FIXME Holding registers have placeholders.
+        HoldingRegistersMinAddr: 0x4e1f,
+        HoldingRegistersMaxAddr: 0x4e21,
         InputRegistersMinAddr:   0x7531,
         InputRegistersMaxAddr:   0x9c3f,
     }

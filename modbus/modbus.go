@@ -270,7 +270,8 @@ func (s *ModbusServer)Process(datagram []byte) (rawResponse []byte) {
     case WriteSingleCoil:        r, e = s.WriteSingleCoil(&request)
     case WriteMultipleCoils:     r, e = s.WriteMultipleCoils(&request)
     case WriteMultipleRegisters: r, e = s.WriteMultipleRegisters(&request)
-    case EncapsulatedInterfaceTransport: r, e = s.EncapsulatedInterfaceTransport(&request)
+    case EncapsulatedInterfaceTransport:
+        r, e = s.EncapsulatedInterfaceTransport(&request)
     default:
         log.Printf("unsupported function code 0x%02x", request.FunctionCode)
         e = ExceptionInvalidFunc

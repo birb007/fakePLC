@@ -2,7 +2,6 @@ package s71200
 
 import (
     "time"
-    "fmt"
     "math"
 )
 
@@ -72,14 +71,12 @@ func (s *State)tick() {
     const PROPANE_MOLE_PER_M3 float64 = 11185.68
     const GAS_CONSTANT        float64 = 8.314
 
-    fmt.Println(s.readTemperature, s.elementTemperature, s.setTemperature, s.readPressure)
     // Update heating element in direction of target temperature.
     if s.setTemperature > s.readTemperature {
         s.elementTemperature += HEATING_INC
     } else {
         s.elementTemperature -= HEATING_INC
     }
-    fmt.Println(s.readTemperature, s.elementTemperature, s.setTemperature, s.readPressure)
 
     // Clamp heating element between 10C and 80C.
     s.elementTemperature = math.Min(

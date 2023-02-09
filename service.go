@@ -17,20 +17,24 @@ func handleConnections(ctx context.Context, listener net.Listener, handler ConnH
         listener.Close()
     }()
 
+    connId := 0
     for {
         conn, err := listener.Accept()
-        log.Printf("new connection from %s\n", conn.RemoteAddr().String())
         if err != nil && ctx.Err() == context.Canceled {
             // We failed to accept a connection because we shutting down.
             return
         }
         // Close the connection if the context is cancelled.
+        log.Printf("[%d] new connection from %s\n",
+            connId, conn.RemoteAddr().String())
         defer conn.Close()
         go func() {
             <-ctx.Done()
             listener.Close()
         }()
         // Handle the connection with user provided handler.
+        ctx = context.WithValue(ctx, "connId", connId)
+        connId += 1
         go handler(ctx, conn)
     }
 }

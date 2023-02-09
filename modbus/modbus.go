@@ -2,12 +2,22 @@ package modbus
 
 import (
     "log"
+    "context"
     "encoding/binary"
 )
+
+type ConnCtx context.Context
 
 type FunctionCode  byte
 type ExceptionCode byte
 type MEIObjectId   byte
+
+type MBAPHeader struct {
+    TransactionId uint16
+    ProtocolId    uint16
+    Length        uint16
+    UnitId        byte
+}
 
 type RequestPDU struct {
     FunctionCode FunctionCode
@@ -56,16 +66,16 @@ type ModbusDevice interface {
     Process([]byte) []byte
 
     // MODBUS functions
-    ReadCoils(*RequestPDU)                (*ResponsePDU, ExceptionCode)
-    ReadDiscreteInputs(*RequestPDU)       (*ResponsePDU, ExceptionCode)
-    ReadHoldingRegisters(*RequestPDU)     (*ResponsePDU, ExceptionCode)
-    ReadInputRegisters(*RequestPDU)       (*ResponsePDU, ExceptionCode)
-    WriteSingleCoil(*RequestPDU)          (*ResponsePDU, ExceptionCode)
-    WriteMultipleCoils(*RequestPDU)       (*ResponsePDU, ExceptionCode)
-    WriteMultipleRegisters(*RequestPDU)   (*ResponsePDU, ExceptionCode)
+    ReadCoils                     (ConnCtx, *RequestPDU) (*ResponsePDU, ExceptionCode)
+    ReadDiscreteInputs            (ConnCtx, *RequestPDU) (*ResponsePDU, ExceptionCode)
+    ReadHoldingRegisters          (ConnCtx, *RequestPDU) (*ResponsePDU, ExceptionCode)
+    ReadInputRegisters            (ConnCtx, *RequestPDU) (*ResponsePDU, ExceptionCode)
+    WriteSingleCoil               (ConnCtx, *RequestPDU) (*ResponsePDU, ExceptionCode)
+    WriteMultipleCoils            (ConnCtx, *RequestPDU) (*ResponsePDU, ExceptionCode)
+    WriteMultipleRegisters        (ConnCtx, *RequestPDU) (*ResponsePDU, ExceptionCode)
     // MEI Functions
-    EncapsulatedInterfaceTransport(*RequestPDU) (*ResponsePDU, ExceptionCode)
-    ReadDeviceIdentification(*MEIRequest) (*MEIResponse, ExceptionCode)
+    EncapsulatedInterfaceTransport(ConnCtx, *RequestPDU) (*ResponsePDU, ExceptionCode)
+    ReadDeviceIdentification      (ConnCtx, *MEIRequest) (*MEIResponse, ExceptionCode)
     /*
      *ReadFileRecord()
      *WriteFileRecord()
@@ -78,23 +88,23 @@ type ModbusDevice interface {
 
 // Several MODBUS functions are only accessible via the serial line.
 type SerialModbusDevice interface {
-    ReadExceptionStatus(*RequestPDU)                (*ResponsePDU, ExceptionCode)
+    ReadExceptionStatus               (ConnCtx, *RequestPDU) (*ResponsePDU, ExceptionCode)
     // Diagnostics
-    ReturnQueryData(*RequestPDU)                    (*ResponsePDU, ExceptionCode)
-    RestartCommunicationsOption(*RequestPDU)        (*ResponsePDU, ExceptionCode)
-    ReturnDiagnosticRegister(*RequestPDU)           (*ResponsePDU, ExceptionCode)
-    ChangeASCIIDelimiter(*RequestPDU)               (*ResponsePDU, ExceptionCode)
-    ForceListenOnlyMode(*RequestPDU)                (*ResponsePDU, ExceptionCode)
-    ClearCountersAndDiagnosticRegister(*RequestPDU) (*ResponsePDU, ExceptionCode)
-    ReturnBusMessageCount(*RequestPDU)              (*ResponsePDU, ExceptionCode)
-    ReturnBusCommunicationErrorCount(*RequestPDU)   (*ResponsePDU, ExceptionCode)
-    ReturnBusExceptionErrorCount(*RequestPDU)       (*ResponsePDU, ExceptionCode)
-    ReturnServerMessageCount(*RequestPDU)           (*ResponsePDU, ExceptionCode)
-    ReturnServerNoResponseCount(*RequestPDU)        (*ResponsePDU, ExceptionCode)
-    ReturnServerNAKCount(*RequestPDU)               (*ResponsePDU, ExceptionCode)
-    ReturnServerBusyCount(*RequestPDU)              (*ResponsePDU, ExceptionCode)
-    ReturnBusCharacterOverrunCount(*RequestPDU)     (*ResponsePDU, ExceptionCode)
-    ClearOverrunCounterAndFlag(*RequestPDU)         (*ResponsePDU, ExceptionCode)
+    ReturnQueryData                   (ConnCtx, *RequestPDU) (*ResponsePDU, ExceptionCode)
+    RestartCommunicationsOption       (ConnCtx, *RequestPDU) (*ResponsePDU, ExceptionCode)
+    ReturnDiagnosticRegister          (ConnCtx, *RequestPDU) (*ResponsePDU, ExceptionCode)
+    ChangeASCIIDelimiter              (ConnCtx, *RequestPDU) (*ResponsePDU, ExceptionCode)
+    ForceListenOnlyMode               (ConnCtx, *RequestPDU) (*ResponsePDU, ExceptionCode)
+    ClearCountersAndDiagnosticRegister(ConnCtx, *RequestPDU) (*ResponsePDU, ExceptionCode)
+    ReturnBusMessageCount             (ConnCtx, *RequestPDU) (*ResponsePDU, ExceptionCode)
+    ReturnBusCommunicationErrorCount  (ConnCtx, *RequestPDU) (*ResponsePDU, ExceptionCode)
+    ReturnBusExceptionErrorCount      (ConnCtx, *RequestPDU) (*ResponsePDU, ExceptionCode)
+    ReturnServerMessageCount          (ConnCtx, *RequestPDU) (*ResponsePDU, ExceptionCode)
+    ReturnServerNoResponseCount       (ConnCtx, *RequestPDU) (*ResponsePDU, ExceptionCode)
+    ReturnServerNAKCount              (ConnCtx, *RequestPDU) (*ResponsePDU, ExceptionCode)
+    ReturnServerBusyCount             (ConnCtx, *RequestPDU) (*ResponsePDU, ExceptionCode)
+    ReturnBusCharacterOverrunCount    (ConnCtx, *RequestPDU) (*ResponsePDU, ExceptionCode)
+    ClearOverrunCounterAndFlag        (ConnCtx, *RequestPDU) (*ResponsePDU, ExceptionCode)
 
     // FIXME: add rest
 }
@@ -176,6 +186,15 @@ func NewExc(function FunctionCode) ExceptionCode {
     return ExceptionCode(byte(function) + exceptionOffset)
 }
 
+func (m *MBAPHeader)serialize() []byte {
+    buf := make([]byte, 7) // MBAP header is always 7 bytes
+    binary.BigEndian.PutUint16(buf[0:], m.TransactionId)
+    binary.BigEndian.PutUint16(buf[2:], m.ProtocolId)
+    binary.BigEndian.PutUint16(buf[4:], m.Length)
+    buf[6] = m.UnitId
+    return buf
+}
+
 // Serialization routines for RequestPDU and ResponsePDU
 func (r *ResponsePDU)serialize() []byte {
     buf := make([]byte, 1 + len(r.Data))
@@ -215,10 +234,10 @@ type ModbusServer struct {
 }
 
 func NewServer(mmap MemoryMap, deviceInfo BasicDeviceIdentification, fileRecord [][]byte) ModbusServer {
-    n_coils := mmap.CoilMaxAddr - mmap.CoilMinAddr
-    n_discr := mmap.DiscreteInputsMaxAddr - mmap.DiscreteInputsMinAddr
+    n_coils := mmap.CoilMaxAddr             - mmap.CoilMinAddr
+    n_discr := mmap.DiscreteInputsMaxAddr   - mmap.DiscreteInputsMinAddr
     n_hldng := mmap.HoldingRegistersMaxAddr - mmap.HoldingRegistersMinAddr
-    n_inpts := mmap.InputRegistersMaxAddr - mmap.InputRegistersMinAddr
+    n_inpts := mmap.InputRegistersMaxAddr   - mmap.InputRegistersMinAddr
 
     return ModbusServer {
         Mmap:             mmap,
@@ -231,19 +250,48 @@ func NewServer(mmap MemoryMap, deviceInfo BasicDeviceIdentification, fileRecord 
     }
 }
 
-func (s *ModbusServer)Process(datagram []byte) (rawResponse []byte) {
+func (s *ModbusServer)Process(ctx ConnCtx, datagram []byte) (rawResponse []byte) {
     // The request is malformed so no output will be returned; at least one
     // byte is required for the function code.
-    if len(datagram) < 1 {
+    if len(datagram) < 7 {
         return nil
     }
+
+    mbap := MBAPHeader {
+        TransactionId: binary.BigEndian.Uint16(datagram[0:]),
+        ProtocolId:    binary.BigEndian.Uint16(datagram[2:]),
+        Length:        binary.BigEndian.Uint16(datagram[4:]),
+        UnitId:        datagram[6],
+    }
+
+    log.Printf("[%d] processing MBAP header", ctx.Value("connId"))
+
+    // Check that ProtocolIdentification = 0 (MODBUS)
+    if mbap.ProtocolId != 0 {
+        return nil
+    }
+    // The request is malformed since no request PDU data follows.
+    if mbap.Length < 1 {
+        log.Printf("[%d] malformed MBAP header indicating no trailing data",
+            ctx.Value("connId"))
+        return nil
+    }
+
+    // The Transaction Identification is supposed to be copied by the server
+    // when responding to the client but this might not be true in reality.
+    // FIXME: check uniqueness of TransactionId for possible unmasking
+    // FIXME: check UnitId for possible unmasking
+
+    // Slice off MBAP header to retrieve RequestPDU
+    datagram = datagram[7:]
 
     request := RequestPDU {
         FunctionCode: FunctionCode(datagram[0]),
         Data:         datagram[1:],
     }
 
-    log.Printf("processing RequestPDU for 0x%02x", request.FunctionCode)
+    log.Printf("[%d] processing RequestPDU for 0x%02x",
+        ctx.Value("connId"), request.FunctionCode)
 
     var r *ResponsePDU = nil
     var e ExceptionCode = ExceptionNone
@@ -251,8 +299,8 @@ func (s *ModbusServer)Process(datagram []byte) (rawResponse []byte) {
     // Handle "device failures" (ie. panic) from command handlers.
     defer func() {
         if e := recover(); e != nil {
-            log.Printf("panic thrown in 0x%02x handler: %s",
-                request.FunctionCode, e);
+            log.Printf("[%d] panic thrown in 0x%02x handler: %s",
+                ctx.Value("connId"), request.FunctionCode, e);
             exceptionResponse := ExceptionResponsePDU {
                 FunctionCode:  request.FunctionCode,
                 ExceptionCode: ExceptionDeviceFail,
@@ -263,17 +311,18 @@ func (s *ModbusServer)Process(datagram []byte) (rawResponse []byte) {
 
     // Dispatch function code to MODBUS handlers.
     switch request.FunctionCode {
-    case ReadCoils:              r, e = s.ReadCoils(&request)
-    case ReadDiscreteInputs:     r, e = s.ReadDiscreteInputs(&request)
-    case ReadHoldingRegisters:   r, e = s.ReadHoldingRegisters(&request)
-    case ReadInputRegisters:     r, e = s.ReadInputRegisters(&request)
-    case WriteSingleCoil:        r, e = s.WriteSingleCoil(&request)
-    case WriteMultipleCoils:     r, e = s.WriteMultipleCoils(&request)
-    case WriteMultipleRegisters: r, e = s.WriteMultipleRegisters(&request)
+    case ReadCoils:              r, e = s.ReadCoils(ctx, &request)
+    case ReadDiscreteInputs:     r, e = s.ReadDiscreteInputs(ctx, &request)
+    case ReadHoldingRegisters:   r, e = s.ReadHoldingRegisters(ctx, &request)
+    case ReadInputRegisters:     r, e = s.ReadInputRegisters(ctx, &request)
+    case WriteSingleCoil:        r, e = s.WriteSingleCoil(ctx, &request)
+    case WriteMultipleCoils:     r, e = s.WriteMultipleCoils(ctx, &request)
+    case WriteMultipleRegisters: r, e = s.WriteMultipleRegisters(ctx, &request)
     case EncapsulatedInterfaceTransport:
-        r, e = s.EncapsulatedInterfaceTransport(&request)
+        r, e = s.EncapsulatedInterfaceTransport(ctx, &request)
     default:
-        log.Printf("unsupported function code 0x%02x", request.FunctionCode)
+        log.Printf("[%d] unsupported function code 0x%02x",
+            ctx.Value("connId"), request.FunctionCode)
         e = ExceptionInvalidFunc
     }
 
@@ -288,15 +337,20 @@ func (s *ModbusServer)Process(datagram []byte) (rawResponse []byte) {
             FunctionCode:  request.FunctionCode,
             ExceptionCode: exception,
         }
-        log.Printf("function 0x%02x threw exception %+v", request.FunctionCode, exceptionResponse)
+        log.Printf("[%d] function 0x%02x threw exception %+v",
+            ctx.Value("connId"), request.FunctionCode, exceptionResponse)
         return exceptionResponse.serialize()
     }
-    log.Printf("function 0x%02x returned %+v", request.FunctionCode, response)
+    log.Printf("[%d] function 0x%02x returned %+v",
+        ctx.Value("connId"), request.FunctionCode, response)
 
     // If the MODBUS function did not return any data then the function
     // returns no data to the client.
     if response != nil {
-        return response.serialize()
+        payload := response.serialize()
+        mbap.Length = uint16(len(payload)) // update MBAP length for response
+        // Prepend MBAP header for TCP transport.
+        return append(mbap.serialize(), payload...)
     } else {
         return nil
     }
@@ -314,9 +368,12 @@ func createBitVector(size byte) ([]byte, []byte) {
     return data, data[1:]
 }
 
-func (s *ModbusServer)ReadCoils(request *RequestPDU) (*ResponsePDU, ExceptionCode) {
+func (s *ModbusServer)ReadCoils(ctx ConnCtx, request *RequestPDU) (*ResponsePDU, ExceptionCode) {
     startingAddr := binary.BigEndian.Uint16(request.Data[0:])
     n_coils      := binary.BigEndian.Uint16(request.Data[2:])
+
+    log.Printf("[%d] called ReadCoils addr:0x%02x n_coils:%d",
+        ctx.Value("connId"), startingAddr, n_coils)
 
     if n_coils < 0x1 || n_coils > 0x07D0 {
         return nil, ExceptionOutOfBounds
@@ -334,9 +391,12 @@ func (s *ModbusServer)ReadCoils(request *RequestPDU) (*ResponsePDU, ExceptionCod
     return &ResponsePDU{FunctionCode: ReadCoils, Data: data}, ExceptionNone
 }
 
-func (s *ModbusServer)ReadDiscreteInputs(request *RequestPDU) (*ResponsePDU, ExceptionCode) {
+func (s *ModbusServer)ReadDiscreteInputs(ctx ConnCtx, request *RequestPDU) (*ResponsePDU, ExceptionCode) {
     startingAddr := binary.BigEndian.Uint16(request.Data[0:])
     n_inputs     := binary.BigEndian.Uint16(request.Data[2:])
+
+    log.Printf("[%d] called ReadDiscreteInputs addr:0x%02x n_inputs:%d",
+        ctx.Value("connId"), startingAddr, n_inputs)
 
     if n_inputs < 0x1 || n_inputs > 0x07D0 {
         return nil, ExceptionOutOfBounds
@@ -355,9 +415,12 @@ func (s *ModbusServer)ReadDiscreteInputs(request *RequestPDU) (*ResponsePDU, Exc
     return &ResponsePDU{FunctionCode: ReadDiscreteInputs, Data: data}, ExceptionNone
 }
 
-func (s *ModbusServer)ReadHoldingRegisters(request *RequestPDU) (*ResponsePDU, ExceptionCode) {
+func (s *ModbusServer)ReadHoldingRegisters(ctx ConnCtx, request *RequestPDU) (*ResponsePDU, ExceptionCode) {
     startingAddr := binary.BigEndian.Uint16(request.Data[0:])
     n_regs       := binary.BigEndian.Uint16(request.Data[2:])
+
+    log.Printf("[%d] called ReadHoldingRegisters addr:0x%02x n_regs:%d",
+        ctx.Value("connId"), startingAddr, n_regs)
 
     if n_regs < 0x1 || n_regs > 0x007D {
         return nil, ExceptionOutOfBounds
@@ -377,9 +440,12 @@ func (s *ModbusServer)ReadHoldingRegisters(request *RequestPDU) (*ResponsePDU, E
     return &ResponsePDU{FunctionCode: ReadDiscreteInputs, Data: data}, ExceptionNone
 }
 
-func (s *ModbusServer)ReadInputRegisters(request *RequestPDU) (*ResponsePDU, ExceptionCode) {
+func (s *ModbusServer)ReadInputRegisters(ctx ConnCtx, request *RequestPDU) (*ResponsePDU, ExceptionCode) {
     startingAddr := binary.BigEndian.Uint16(request.Data[0:])
     n_regs       := binary.BigEndian.Uint16(request.Data[2:])
+
+    log.Printf("[%d] called ReadInputRegisters addr:0x%02x n_regs:%d",
+        ctx.Value("connId"), startingAddr, n_regs)
 
     if n_regs < 0x1 || n_regs > 0x007D {
         return nil, ExceptionOutOfBounds
@@ -399,9 +465,12 @@ func (s *ModbusServer)ReadInputRegisters(request *RequestPDU) (*ResponsePDU, Exc
     return &ResponsePDU{FunctionCode: ReadDiscreteInputs, Data: data}, ExceptionNone
 }
 
-func (s *ModbusServer)WriteSingleCoil(request *RequestPDU) (*ResponsePDU, ExceptionCode) {
+func (s *ModbusServer)WriteSingleCoil(ctx ConnCtx, request *RequestPDU) (*ResponsePDU, ExceptionCode) {
     addr := binary.BigEndian.Uint16(request.Data[0:])
     val  := binary.BigEndian.Uint16(request.Data[2:])
+
+    log.Printf("[%d] called WriteSingleCoil addr:0x%02x val:%d",
+        ctx.Value("connId"), addr, val)
 
     if addr < s.Mmap.CoilMinAddr || addr > s.Mmap.CoilMaxAddr {
         return nil, ExceptionInvalidAddr
@@ -423,7 +492,7 @@ func (s *ModbusServer)WriteSingleCoil(request *RequestPDU) (*ResponsePDU, Except
     }, ExceptionNone
 }
 
-func (s *ModbusServer)WriteSingleRegister(request *RequestPDU) (*ResponsePDU, ExceptionCode) {
+func (s *ModbusServer)WriteSingleRegister(ctx ConnCtx, request *RequestPDU) (*ResponsePDU, ExceptionCode) {
     addr := binary.BigEndian.Uint16(request.Data[0:])
     val  := binary.BigEndian.Uint16(request.Data[2:])
 
@@ -439,10 +508,13 @@ func (s *ModbusServer)WriteSingleRegister(request *RequestPDU) (*ResponsePDU, Ex
     }, ExceptionNone
 }
 
-func (s *ModbusServer)WriteMultipleCoils(request *RequestPDU) (*ResponsePDU, ExceptionCode) {
+func (s *ModbusServer)WriteMultipleCoils(ctx ConnCtx, request *RequestPDU) (*ResponsePDU, ExceptionCode) {
     startingAddr := binary.BigEndian.Uint16(request.Data[0:])
     n_outputs    := binary.BigEndian.Uint16(request.Data[2:])
     byte_count   := uint16(request.Data[4])
+
+    log.Printf("[%d] called WriteMultipleCoils addr:0x%02x n_outputs:%d, byte_count:%d",
+        ctx.Value("connId"), startingAddr, n_outputs, byte_count)
 
     if n_outputs < 0x1 || n_outputs > 0x07B0 {
         return nil, ExceptionOutOfBounds
@@ -464,10 +536,13 @@ func (s *ModbusServer)WriteMultipleCoils(request *RequestPDU) (*ResponsePDU, Exc
     }, ExceptionNone
 }
 
-func (s *ModbusServer)WriteMultipleRegisters(request *RequestPDU) (*ResponsePDU, ExceptionCode) {
+func (s *ModbusServer)WriteMultipleRegisters(ctx ConnCtx, request *RequestPDU) (*ResponsePDU, ExceptionCode) {
     startingAddr := binary.BigEndian.Uint16(request.Data[0:])
     n_regs       := binary.BigEndian.Uint16(request.Data[2:])
     byte_count   := uint16(request.Data[4])
+
+    log.Printf("[%d] called WriteMultipleRegisters addr:0x%02x n_regs:%d, byte_count:%d",
+        ctx.Value("connId"), startingAddr, n_regs, byte_count)
 
     if n_regs < 0x1 || n_regs > 0x7B {
         return nil, ExceptionOutOfBounds
@@ -494,7 +569,35 @@ func (s *ModbusServer)WriteMultipleRegisters(request *RequestPDU) (*ResponsePDU,
 }
 
 /*
- *func (s *ModbusServer)ReadFileRecord(request *RequestPDU) (*ResponsePDU, ExceptionCode) {
+ *func (s *ModbusServer)ReadFileRecord(ctx ConnCtx, request *RequestPDU) (*ResponsePDU, ExceptionCode) {
+ *    byteCount := uint16(request.Data[0])
+
+    if n_regs < 0x1 || n_regs > 0x7B {
+        return nil, ExceptionOutOfBounds
+    }
+
+    if (startingAddr < s.Mmap.HoldingRegistersMinAddr ||
+        startingAddr + n_regs > s.Mmap.HoldingRegistersMaxAddr) {
+        return nil, ExceptionInvalidAddr
+    }
+
+    // NOTE: The specification is ambiguous whether "register" refers to
+    // Holding Registers or Input Registers. Hoever, unofficial sources
+    // suggest Holding Registers is correct.
+    for i := uint16(0); i < n_regs && i << 1 < byte_count; i++ {
+        val := binary.BigEndian.Uint16(request.Data[i*2 + 5:])
+        s.HoldingRegisters[startingAddr + i] = val;
+    }
+
+    return &ResponsePDU{
+        FunctionCode: request.FunctionCode,
+        Data: request.Data[:4],
+    }, ExceptionNone
+
+}
+
+/*
+ *func (s *ModbusServer)ReadFileRecord(ctx ConnCtx, request *RequestPDU) (*ResponsePDU, ExceptionCode) {
  *    byteCount := uint16(request.Data[0])
  *
  *    if byteCount < 0x07 || byteCount > 0xf5 {
@@ -537,27 +640,30 @@ func (s *ModbusServer)WriteMultipleRegisters(request *RequestPDU) (*ResponsePDU,
  *}
  */
 
-func (s *ModbusServer)EncapsulatedInterfaceTransport(request *RequestPDU) (*ResponsePDU, ExceptionCode) {
+func (s *ModbusServer)EncapsulatedInterfaceTransport(ctx ConnCtx, request *RequestPDU) (*ResponsePDU, ExceptionCode) {
     meiRequest := MEIRequest {
         FunctionCode: request.FunctionCode,
         MEIType:      FunctionCode(request.Data[0]),
         Data:         request.Data[1:],
     }
-    log.Printf("processing MEI Request 0x%02x", meiRequest.MEIType)
+    log.Printf("[%d] processing MEI Request 0x%02x",
+        ctx.Value("connId"), meiRequest.MEIType)
 
     var payload []byte
     e := ExceptionNone
 
     // Dispatch MEI request into specific handlers.
     switch meiRequest.MEIType {
-    case ReadDeviceIdentification: payload, e = s.ReadDeviceIdentification(&meiRequest)
+    case ReadDeviceIdentification: payload, e = s.ReadDeviceIdentification(ctx, &meiRequest)
 
     default:
-        log.Printf("unsupported MEI type 0x%02x", meiRequest.MEIType)
+        log.Printf("[%d] unsupported MEI type 0x%02x",
+            ctx.Value("connId"), meiRequest.MEIType)
 
     }
     if e != ExceptionNone {
-        log.Printf("MEI handler returned exception 0x%02x", e)
+        log.Printf("[%d] MEI handler returned exception 0x%02x",
+            ctx.Value("connId"), e)
         return nil, e
     }
 
@@ -568,9 +674,12 @@ func (s *ModbusServer)EncapsulatedInterfaceTransport(request *RequestPDU) (*Resp
     return &response, ExceptionNone
 }
 
-func (s *ModbusServer)ReadDeviceIdentification(request *MEIRequest) ([]byte, ExceptionCode) {
+func (s *ModbusServer)ReadDeviceIdentification(ctx ConnCtx, request *MEIRequest) ([]byte, ExceptionCode) {
     readDeviceIdCode := request.Data[0]
     objectId         := MEIObjectId(request.Data[1])
+
+    log.Printf("[%d] called ReadDeviceIdentification deviceId:%d object:%d",
+        ctx.Value("connId"), readDeviceIdCode, objectId)
 
     // Payload used to return object data to the client.
     // 5 bytes for MEI object identification preamble.
@@ -578,15 +687,18 @@ func (s *ModbusServer)ReadDeviceIdentification(request *MEIRequest) ([]byte, Exc
     payload[0] = readDeviceIdCode
     payload[1] = MEIConformBasicHasIndividual
     payload[2] = 0xff   // More data follows (default)
-    payload[3] = 0x00   // FIXME: what is default Object Id?
+    payload[3] = 0x03   // FIXME: what is default Object Id?
 
     // FIXME: add stream support
     switch readDeviceIdCode {
     case MEIBasicDeviceIdentification:
+        obj := make([]byte, 1)
+        obj = append(obj, s.BasicDevInfo.VendorName)
+        obj = append(obj, s.BasicDevInfo.ProductCode)
+        obj = append(obj, s.BasicDevInfo.MajorMinorRevision)
     case MEIRegularDeviceIdentification:
     case MEIExtendedDeviceIdentification:
     case MEISpecificIdentificationObject:
-        log.Println("Reading specific identification object:", objectId)
         payload[2] = 0x00   // No more data follows.
         payload[4] = 0x01   // Only one object.
 
@@ -605,12 +717,13 @@ func (s *ModbusServer)ReadDeviceIdentification(request *MEIRequest) ([]byte, Exc
             obj[1] = byte(len(s.BasicDevInfo.MajorMinorRevision))
             obj = append(obj[2:], s.BasicDevInfo.MajorMinorRevision...)
         default:
-            log.Println("Illegal Object Id:", objectId)
+            log.Println("[%d] illegal object:%d", ctx.Value("connId"), objectId)
             return nil, ExceptionInvalidAddr
         }
         payload = append(payload, obj...)
     default:
-        log.Println("Illegal Read device ID code:", readDeviceIdCode)
+        log.Println("[%d] illegal deviceId:%d",
+            ctx.Value("connId"), readDeviceIdCode)
         return nil, ExceptionOutOfBounds
     }
     return payload, ExceptionNone

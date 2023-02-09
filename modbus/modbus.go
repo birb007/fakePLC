@@ -693,9 +693,9 @@ func (s *ModbusServer)ReadDeviceIdentification(ctx ConnCtx, request *MEIRequest)
     switch readDeviceIdCode {
     case MEIBasicDeviceIdentification:
         obj := make([]byte, 1)
-        obj = append(obj, s.BasicDevInfo.VendorName)
-        obj = append(obj, s.BasicDevInfo.ProductCode)
-        obj = append(obj, s.BasicDevInfo.MajorMinorRevision)
+        obj = append(obj, s.BasicDevInfo.VendorName...)
+        obj = append(obj, s.BasicDevInfo.ProductCode...)
+        obj = append(obj, s.BasicDevInfo.MajorMinorRevision...)
     case MEIRegularDeviceIdentification:
     case MEIExtendedDeviceIdentification:
     case MEISpecificIdentificationObject:

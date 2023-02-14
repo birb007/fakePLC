@@ -35,7 +35,15 @@ func handleConnections(ctx context.Context, listener net.Listener, handler ConnH
         // Handle the connection with user provided handler.
         ctx = context.WithValue(ctx, "connId", connId)
         connId += 1
-        go handler(ctx, conn)
+        go func() {
+            // Handle any exception triggered by the user handler.
+            defer func() {
+                if (recover() != nil) {
+                    log.Printf("[%d] triggered an exception", ctx.Value("connId"))
+                }
+            }()
+            handler(ctx, conn)
+        }()
     }
 }
 

@@ -12,7 +12,7 @@ func main() {
     defer plc.Close()
 
     ctx, cancel := context.WithCancel(context.Background())
-    launchService(ctx, "tcp", "localhost:9999", plc.HandleMODBUSConn)
+    launchService(ctx, "tcp", "0.0.0.0:502", plc.HandleMODBUSConn)
     defer cancel()
 
     // Wait forever.

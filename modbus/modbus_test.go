@@ -1,28 +1,28 @@
 package modbus
 
-import "testing"
+import (
+    "testing"
+    "context"
+)
 
 // Fuzz the MODBUS process entrypoint to prevent clients from DoS-ing servers.
 func FuzzProcess(f *testing.F) {
     // Arbitrary memory map (non-overlapping).
-    mmap := MemoryMap {
-        CoilMinAddr:             0x0000,
-        CoilMaxAddr:             0x270f,
-        DiscreteInputsMinAddr:   0x2711,
-        DiscreteInputsMaxAddr:   0x4e1f,
-        HoldingRegistersMinAddr: 0xfe20,
-        HoldingRegistersMaxAddr: 0xf520,
-        InputRegistersMinAddr:   0x7531,
-        InputRegistersMaxAddr:   0x9c3f,
+    config := DeviceMap {
+        CoilMax:             0xff,
+        DiscreteInputsMax:   0xff,
+        HoldingRegistersMax: 0xff,
+        InputRegistersMax:   0xff,
     }
     basicDevInfo := BasicDeviceIdentification{
         VendorName:         []byte("fakePLC"),
         ProductCode:        []byte("FuzzTarget"),
         MajorMinorRevision: []byte("V0.1"),
     }
-    srv := NewServer(mmap, basicDevInfo, nil)
+    srv := NewServer(config, basicDevInfo, nil)
 
+    ctx := context.WithValue(context.Background(), "connId", 1);
     f.Fuzz(func(t *testing.T, request []byte) {
-        srv.Process(request)
+        srv.Process(ctx, request)
     })
 }

@@ -18,17 +18,11 @@ type S71200 struct {
 func New() S71200 {
     plc := S71200{}
     // Initialise the MODBUS memory map (taken from device).
-    mmap := modbus.MemoryMap {
-        CoilMinAddr:             0x0001,
-        CoilMaxAddr:             0x270f,
-        DiscreteInputsMinAddr:   0x2711,
-        DiscreteInputsMaxAddr:   0x4e1f,
-        // The Holding Registers are split between two ranges.
-        // FIXME Holding registers have placeholders.
-        HoldingRegistersMinAddr: 0x4e1f,
-        HoldingRegistersMaxAddr: 0x4e21,
-        InputRegistersMinAddr:   0x7531,
-        InputRegistersMaxAddr:   0x9c3f,
+    config := modbus.DeviceMap {
+        CoilMax:             0xff,
+        DiscreteInputsMax:   0xff,
+        HoldingRegistersMax: 0xff,
+        InputRegistersMax:   0xff,
     }
     // FIXME: replace with proper information.
     basicDevInfo := modbus.BasicDeviceIdentification{
@@ -45,7 +39,7 @@ func New() S71200 {
      *    fileRecord[i] = make([]byte, 10_000 * 2)
      *}
      */
-    plc.ModbusServer = modbus.NewServer(mmap, basicDevInfo, nil)
+    plc.ModbusServer = modbus.NewServer(config, basicDevInfo, nil)
     plc.logicHalt = plc.start()
 
     return plc

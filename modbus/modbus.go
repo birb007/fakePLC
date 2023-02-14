@@ -210,20 +210,16 @@ func (e *ExceptionResponsePDU)serialize() []byte {
     return buf
 }
 
-type MemoryMap struct {
-    CoilMinAddr             uint16
-    CoilMaxAddr             uint16
-    DiscreteInputsMinAddr   uint16
-    DiscreteInputsMaxAddr   uint16
-    HoldingRegistersMinAddr uint16
-    HoldingRegistersMaxAddr uint16
-    InputRegistersMinAddr   uint16
-    InputRegistersMaxAddr   uint16
+type DeviceMap struct {
+    CoilMax             uint16
+    DiscreteInputsMax   uint16
+    HoldingRegistersMax uint16
+    InputRegistersMax   uint16
 }
 
 // Default object which implements the base MODBUS specification.
 type ModbusServer struct {
-    Mmap             MemoryMap
+    Config           DeviceMap
     Coils            []byte
 	DiscreteInputs   []byte
 	HoldingRegisters []uint16
@@ -233,18 +229,13 @@ type ModbusServer struct {
     BasicDevInfo     BasicDeviceIdentification
 }
 
-func NewServer(mmap MemoryMap, deviceInfo BasicDeviceIdentification, fileRecord [][]byte) ModbusServer {
-    n_coils := mmap.CoilMaxAddr             - mmap.CoilMinAddr
-    n_discr := mmap.DiscreteInputsMaxAddr   - mmap.DiscreteInputsMinAddr
-    n_hldng := mmap.HoldingRegistersMaxAddr - mmap.HoldingRegistersMinAddr
-    n_inpts := mmap.InputRegistersMaxAddr   - mmap.InputRegistersMinAddr
-
+func NewServer(config DeviceMap, deviceInfo BasicDeviceIdentification, fileRecord [][]byte) ModbusServer {
     return ModbusServer {
-        Mmap:             mmap,
-        Coils:            make([]byte,   n_coils),
-        DiscreteInputs:   make([]byte,   n_discr),
-        HoldingRegisters: make([]uint16, n_hldng),
-        InputRegisters:   make([]uint16, n_inpts),
+        Config:           config,
+        Coils:            make([]byte,   config.CoilMax),
+        DiscreteInputs:   make([]byte,   config.DiscreteInputsMax),
+        HoldingRegisters: make([]uint16, config.HoldingRegistersMax),
+        InputRegisters:   make([]uint16, config.InputRegistersMax),
         FileRecord:       fileRecord,
         BasicDevInfo:     deviceInfo,
     }
@@ -252,8 +243,8 @@ func NewServer(mmap MemoryMap, deviceInfo BasicDeviceIdentification, fileRecord 
 
 func (s *ModbusServer)Process(ctx ConnCtx, datagram []byte) (rawResponse []byte) {
     // The request is malformed so no output will be returned; at least one
-    // byte is required for the function code.
-    if len(datagram) < 7 {
+    // byte is required for the function code and data.
+    if len(datagram) < 8 {
         return nil
     }
 
@@ -378,8 +369,7 @@ func (s *ModbusServer)ReadCoils(ctx ConnCtx, request *RequestPDU) (*ResponsePDU,
     if n_coils < 0x1 || n_coils > 0x07D0 {
         return nil, ExceptionOutOfBounds
     }
-    if (startingAddr < s.Mmap.CoilMinAddr ||
-        startingAddr + n_coils > s.Mmap.CoilMaxAddr) {
+    if startingAddr + n_coils > s.Config.CoilMax {
         return nil, ExceptionInvalidAddr
     }
 
@@ -401,8 +391,7 @@ func (s *ModbusServer)ReadDiscreteInputs(ctx ConnCtx, request *RequestPDU) (*Res
     if n_inputs < 0x1 || n_inputs > 0x07D0 {
         return nil, ExceptionOutOfBounds
     }
-    if (startingAddr < s.Mmap.DiscreteInputsMinAddr ||
-        startingAddr + n_inputs > s.Mmap.DiscreteInputsMaxAddr) {
+    if startingAddr + n_inputs > s.Config.DiscreteInputsMax {
         return nil, ExceptionInvalidAddr
     }
 
@@ -425,8 +414,7 @@ func (s *ModbusServer)ReadHoldingRegisters(ctx ConnCtx, request *RequestPDU) (*R
     if n_regs < 0x1 || n_regs > 0x007D {
         return nil, ExceptionOutOfBounds
     }
-    if (startingAddr < s.Mmap.HoldingRegistersMinAddr ||
-        startingAddr + n_regs > s.Mmap.HoldingRegistersMaxAddr) {
+    if startingAddr + n_regs > s.Config.HoldingRegistersMax {
         return nil, ExceptionInvalidAddr
     }
 
@@ -450,8 +438,7 @@ func (s *ModbusServer)ReadInputRegisters(ctx ConnCtx, request *RequestPDU) (*Res
     if n_regs < 0x1 || n_regs > 0x007D {
         return nil, ExceptionOutOfBounds
     }
-    if (startingAddr < s.Mmap.InputRegistersMinAddr ||
-        startingAddr + n_regs > s.Mmap.InputRegistersMaxAddr) {
+    if startingAddr + n_regs > s.Config.InputRegistersMax {
         return nil, ExceptionInvalidAddr
     }
 
@@ -472,12 +459,9 @@ func (s *ModbusServer)WriteSingleCoil(ctx ConnCtx, request *RequestPDU) (*Respon
     log.Printf("[%d] called WriteSingleCoil addr:0x%02x val:%d",
         ctx.Value("connId"), addr, val)
 
-    if addr < s.Mmap.CoilMinAddr || addr > s.Mmap.CoilMaxAddr {
+    if addr > s.Config.CoilMax {
         return nil, ExceptionInvalidAddr
     }
-
-    // Adjust address for indexing into backing array.
-    addr -= s.Mmap.CoilMinAddr
 
     switch val {
         case 0xff00: s.Coils[addr] = 1
@@ -496,11 +480,11 @@ func (s *ModbusServer)WriteSingleRegister(ctx ConnCtx, request *RequestPDU) (*Re
     addr := binary.BigEndian.Uint16(request.Data[0:])
     val  := binary.BigEndian.Uint16(request.Data[2:])
 
-    if addr < s.Mmap.HoldingRegistersMinAddr || addr + val > s.Mmap.HoldingRegistersMaxAddr {
+    if addr + val > s.Config.HoldingRegistersMax {
         return nil, ExceptionInvalidAddr
     }
 
-    s.HoldingRegisters[addr - s.Mmap.HoldingRegistersMinAddr] = val;
+    s.HoldingRegisters[addr] = val;
 
     return &ResponsePDU{
         FunctionCode: request.FunctionCode,
@@ -520,7 +504,7 @@ func (s *ModbusServer)WriteMultipleCoils(ctx ConnCtx, request *RequestPDU) (*Res
         return nil, ExceptionOutOfBounds
     }
 
-    if startingAddr < s.Mmap.CoilMinAddr || startingAddr + n_outputs > s.Mmap.CoilMaxAddr {
+    if startingAddr + n_outputs > s.Config.CoilMax {
         return nil, ExceptionInvalidAddr
     }
 
@@ -548,8 +532,7 @@ func (s *ModbusServer)WriteMultipleRegisters(ctx ConnCtx, request *RequestPDU) (
         return nil, ExceptionOutOfBounds
     }
 
-    if (startingAddr < s.Mmap.HoldingRegistersMinAddr ||
-        startingAddr + n_regs > s.Mmap.HoldingRegistersMaxAddr) {
+    if startingAddr + n_regs > s.Config.HoldingRegistersMax {
         return nil, ExceptionInvalidAddr
     }
 
@@ -576,8 +559,7 @@ func (s *ModbusServer)WriteMultipleRegisters(ctx ConnCtx, request *RequestPDU) (
         return nil, ExceptionOutOfBounds
     }
 
-    if (startingAddr < s.Mmap.HoldingRegistersMinAddr ||
-        startingAddr + n_regs > s.Mmap.HoldingRegistersMaxAddr) {
+    if startingAddr + n_regs > s.Config.HoldingRegistersMax {
         return nil, ExceptionInvalidAddr
     }
 
@@ -717,12 +699,12 @@ func (s *ModbusServer)ReadDeviceIdentification(ctx ConnCtx, request *MEIRequest)
             obj[1] = byte(len(s.BasicDevInfo.MajorMinorRevision))
             obj = append(obj[2:], s.BasicDevInfo.MajorMinorRevision...)
         default:
-            log.Println("[%d] illegal object:%d", ctx.Value("connId"), objectId)
+            log.Printf("[%d] illegal object:%d", ctx.Value("connId"), objectId)
             return nil, ExceptionInvalidAddr
         }
         payload = append(payload, obj...)
     default:
-        log.Println("[%d] illegal deviceId:%d",
+        log.Printf("[%d] illegal deviceId:%d",
             ctx.Value("connId"), readDeviceIdCode)
         return nil, ExceptionOutOfBounds
     }

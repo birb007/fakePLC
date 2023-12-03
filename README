@@ -1,0 +1,22 @@
+fakePLC is a basic PLC emulation framework with pluggable protocol support.
+
+Rationale behind this project: existing honeypots are inflexible or use
+3rd-party protocol dependencies which are not designed for adversarial
+interactions. As such, fakePLC implements a MODBUS server, interacting with a
+simulated S7-1200.
+
+The simulated Siemens S7-1200 is _not_ feature complete and _not_ reliable.
+You _should not_ use this without comparing against a real device. The
+simulation models a gas cannister with a heating element. The PLC can modify
+the target temperature of the heating element then read the actual temperature
+of the heating element and the pressure of the cannister.
+
+The rate of change of temperature and the cannister pressure are related to the
+actual temperature and target temperature. In other words, all readings are
+interactive.
+
+The service handler is multi-threaded and fault-tolerant so no networking
+shenanigans are required to add your own protocols (but you might need to add
+locks to emulate a serial protocol).
+
+Feel free to use this as you please.
